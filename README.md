@@ -2,7 +2,7 @@
 
 Run Ollama with GPU on Google Colab, exposed via Cloudflare tunnel.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/YOUR_USERNAME/YOUR_REPO/blob/main/backend/src/modules/llm/colab/server.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/YOUR_USERNAME/YOUR_REPO/blob/main/server.ipynb)
 
 ## Quick Start
 
