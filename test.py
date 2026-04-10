@@ -1,62 +1,106 @@
-"""MARK: Colab Ollama Test"""
+"""MARK: Colab Ollama Test (Standard Libs)"""
 
 # @title Config
-URL = "https://url.com"  # @param {type:"string"}
-MODEL = "qwen3.5:9b"  # @param {type:"string"}
+URL = "https://professional-established-diffs-pirates.trycloudflare.com"  # @param {type:"string"}
+MODEL = "qwen3.5:27b"  # @param {type:"string"}
 
 import time
-from ollama import Client
-from pydantic import BaseModel
-
-client = Client(host=URL)
+import requests
+import json
 
 # --- Helpers ---
 now = lambda: time.perf_counter() * 1000
 
-def chat(messages, **kwargs):
-    return client.chat(model=MODEL, messages=messages, options={"temperature": 0}, think=False, **kwargs)
+def chat(messages, stream=False, format=None, tools=None, **kwargs):
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "stream": stream,
+        "options": {"temperature": 0, **kwargs},
+    }
+    if format:
+        payload["format"] = format
+    if tools:
+        # Convert simple function list to Ollama tool schema
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": f.__name__,
+                    "description": f.__doc__ or "",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "integer"},
+                            "b": {"type": "integer"}
+                        },
+                        "required": ["a", "b"]
+                    }
+                }
+            } for f in tools
+        ]
+
+    response = requests.post(f"{URL}/api/chat", json=payload, stream=stream)
+
+    if stream:
+        return response
+    return response.json()
 
 def elapsed(t0):
     return f"{now() - t0:.0f}ms"
 
-def extract_json(raw: str) -> str:
-    """Strip markdown fences and extract first JSON object."""
+def extract_json(raw: str) -> dict:
+    """Strip markdown fences and parse JSON."""
+    raw = raw.strip()
     if raw.startswith("```"):
         lines = raw.splitlines()[1:]
         raw = "\n".join(lines[:-1] if lines[-1].startswith("```") else lines).strip()
     start, end = raw.find("{"), raw.rfind("}")
-    return raw[start:end + 1] if start != -1 and end > start else raw
+    return json.loads(raw[start:end + 1] if start != -1 and end > start else raw)
 
 # --- Tests ---
 def test_ping():
     t0 = now()
-    client.list()
+    requests.get(f"{URL}/api/tags")
     print(f"🏓 Ping: {elapsed(t0)} ✅")
 
 def test_chat():
     print("🤖 Chat: ", end="", flush=True)
     t0, ttft = now(), None
-    for chunk in chat([{"role": "user", "content": "Hi!"}], stream=True):
-        if ttft is None:
-            ttft = elapsed(t0)
-        print(chunk.message.content, end="", flush=True)
+    resp = chat([{"role": "user", "content": "Hi!"}], stream=True)
+
+    full_content = ""
+    for line in resp.iter_lines():
+        if line:
+            chunk = json.loads(line)
+            if ttft is None:
+                ttft = elapsed(t0)
+            content = chunk.get("message", {}).get("content", "")
+            print(content, end="", flush=True)
+            full_content += content
     print(f" ({ttft} TTFT, {elapsed(t0)})")
 
 def test_structured():
-    class Person(BaseModel):
-        name: str
-        age: int
+    # Simple schema definition without Pydantic
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"}
+        },
+        "required": ["name", "age"]
+    }
 
     t0 = now()
     resp = chat(
         [
-            {"role": "system", "content": "Return only valid JSON that matches the provided schema."},
+            {"role": "system", "content": "Return only valid JSON."},
             {"role": "user", "content": "John is 25 years old."},
         ],
-        format=Person.model_json_schema(),
+        format=schema,
     )
-    person = Person.model_validate_json(extract_json(resp.message.content.strip()))
-    print(f"📋 Structured: {person.model_dump()} ({elapsed(t0)})")
+    person = extract_json(resp["message"]["content"])
+    print(f"📋 Structured: {person} ({elapsed(t0)})")
 
 def test_tool():
     def mul(a: int, b: int) -> int:
@@ -65,11 +109,14 @@ def test_tool():
 
     t0 = now()
     resp = chat([{"role": "user", "content": "100*100?"}], tools=[mul])
-    if resp.message.tool_calls:
-        tc = resp.message.tool_calls[0]
-        print(f"🔧 Tool: {tc.function.name}(...)={mul(**tc.function.arguments)} ({elapsed(t0)})")
+
+    message = resp.get("message", {})
+    if "tool_calls" in message:
+        tc = message["tool_calls"][0]["function"]
+        args = tc["arguments"]
+        print(f"🔧 Tool: {tc['name']}(...)={mul(**args)} ({elapsed(t0)})")
     else:
-        print(f"🔧 Tool: {resp.message.content} ({elapsed(t0)})")
+        print(f"🔧 Tool: {message.get('content')} ({elapsed(t0)})")
 
 if __name__ == "__main__":
     test_ping()
